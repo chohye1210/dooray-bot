@@ -38,7 +38,7 @@ JSON 형식:
 }}
 
 사용자 입력:
-"""{user_text}"""
+'''{user_text}'''
 """
 
     response = gpt_client.chat.completions.create(
