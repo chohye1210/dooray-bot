@@ -11,10 +11,14 @@ from api.common import pack
 
 router = APIRouter()
 
-gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-
 def analyze_vacation_text(user_text: str) -> dict:
+    api_key = os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다.")
+
+    gpt_client = OpenAI(api_key=api_key)
+
     today = datetime.now().strftime("%Y-%m-%d")
 
     prompt = f"""

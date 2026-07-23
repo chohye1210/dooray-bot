@@ -1,10 +1,12 @@
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Request
+from api.common import pack
 
-app = FastAPI()
+router = APIRouter()
 
-@app.post("/dooray/hi")
+
+@router.post("/dooray/hi")
 async def hi_command(req: Request):
-    return {
+    return pack({
         "responseType": "ephemeral",
         "text": "안녕하세요!"
-    }
+    })
