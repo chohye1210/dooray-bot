@@ -101,6 +101,12 @@ SECTION_STYLE = {
 
 
 # =========================================================
+# "선택안함" 버튼 액션 값
+# =========================================================
+CLEAR_ACTION_VALUE = "clear"
+
+
+# =========================================================
 # Dooray 사용자 멘션 문자열 생성
 # =========================================================
 def mention_member(
@@ -269,22 +275,101 @@ def section_block_buttons(section: str) -> list[dict]:
 
 
 # =========================================================
+# "선택안함" 버튼 블록 생성
+#
+# Dooray 버튼은 더블클릭 이벤트를 전달하지 않으므로,
+# 같은 버튼 재클릭 시 토글 취소되는 것과 별개로
+# 명시적으로 선택을 지울 수 있는 버튼을 제공한다.
+# =========================================================
+def clear_button_block() -> list[dict]:
+    return [
+        {
+            "callbackId": "coffee-poll",
+            "actions": [
+                {
+                    "name": "clear",
+                    "type": "button",
+                    "text": "❌ 선택안함",
+                    "value": CLEAR_ACTION_VALUE,
+                }
+            ],
+            "color": "#9CA3AF",
+        }
+    ]
+
+
+# =========================================================
+# 사용자의 기존 선택을 모두 제거한 status를 반환
+#
+# 반환값: (제거 후 status, 이번에 지운 값에 user_tag가 있었는지)
+# =========================================================
+def remove_user_votes(status: dict, user_tag: str) -> dict:
+    for current_key in list(status.keys()):
+        voters = status.get(current_key) or []
+
+        remaining_voters = [
+            voter
+            for voter in voters
+            if voter != user_tag
+        ]
+
+        if remaining_voters:
+            status[current_key] = remaining_voters
+        else:
+            del status[current_key]
+
+    return status
+
+
+# =========================================================
+# 갱신된 status를 반영한 최종 응답 메시지 생성
+# (기존 버튼은 유지하고 선택 현황만 교체)
+# =========================================================
+def rebuild_poll_message(original: dict, status: dict):
+    updated_fields = status_fields(status)
+
+    new_attachments = []
+    status_replaced = False
+
+    for attachment in original.get("attachments") or []:
+        if attachment.get("title") == "선택 현황":
+            new_attachments.append(
+                status_attachment(updated_fields)
+            )
+            status_replaced = True
+        else:
+            new_attachments.append(attachment)
+
+    if not status_replaced:
+        new_attachments.append(
+            status_attachment(updated_fields)
+        )
+
+    return pack(
+        {
+            "responseType": "inChannel",
+            "replaceOriginal": True,
+            "text": (
+                original.get("text")
+                or "☕ 커피 투표를 시작합니다!"
+            ),
+            "attachments": new_attachments,
+        }
+    )
+
+
+# =========================================================
 # 최초 커피 투표 메시지 생성
 # =========================================================
 def create_coffee_poll():
     attachments = []
 
-    section_order = [
-        "추천메뉴",
-        "스무디",
-        "커피",
-        "음료",
-        "병음료",
-    ]
+    section_order = list(MENU_SECTIONS.keys())
 
     for section in section_order:
         attachments.extend(section_block_buttons(section))
 
+    attachments.extend(clear_button_block())
     attachments.append(status_attachment())
 
     return pack(
@@ -298,7 +383,11 @@ def create_coffee_poll():
 
 
 # =========================================================
-# 버튼 클릭 처리
+# 버튼 클릭 처리 (메뉴 선택)
+#
+# - 처음 클릭: 해당 메뉴로 투표 등록 (기존 선택은 자동 해제)
+# - 이미 선택한 것과 동일한 버튼 재클릭("더블클릭" 대응):
+#   선택을 취소(토글 off)하고 미선택 상태로 되돌림
 # =========================================================
 def handle_coffee_action(
     data: dict,
@@ -331,76 +420,80 @@ def handle_coffee_action(
         user_id=user_id,
     )
 
+    # 지금 누른 버튼을 이미 선택하고 있었는지 (토글 취소 판단)
+    already_selected = user_tag in (status.get(selected_key) or [])
+
     # -----------------------------------------------------
     # 사용자당 전체 메뉴 중 하나만 선택 가능
     # 사용자의 기존 선택을 모두 제거
     # -----------------------------------------------------
-    for current_key in list(status.keys()):
-        voters = status.get(current_key) or []
+    status = remove_user_votes(status, user_tag)
 
-        remaining_voters = [
-            voter
-            for voter in voters
-            if voter != user_tag
-        ]
+    if already_selected:
+        # 같은 버튼을 다시 클릭 → 선택 취소 (미선택 상태로)
+        print(
+            "[COFFEE VOTE TOGGLE OFF]",
+            {
+                "section": section,
+                "menu": menu,
+                "temperature": temperature,
+                "user_id": user_id,
+            },
+        )
+    else:
+        # -------------------------------------------------
+        # 새 메뉴에 현재 사용자 추가
+        # -------------------------------------------------
+        status.setdefault(selected_key, [])
 
-        if remaining_voters:
-            status[current_key] = remaining_voters
-        else:
-            del status[current_key]
+        if user_tag not in status[selected_key]:
+            status[selected_key].append(user_tag)
 
-    # -----------------------------------------------------
-    # 새 메뉴에 현재 사용자 추가
-    # -----------------------------------------------------
-    status.setdefault(selected_key, [])
+        print(
+            "[COFFEE VOTE]",
+            {
+                "section": section,
+                "menu": menu,
+                "temperature": temperature,
+                "user_id": user_id,
+                "status": status,
+            },
+        )
 
-    if user_tag not in status[selected_key]:
-        status[selected_key].append(user_tag)
+    return rebuild_poll_message(original, status)
+
+
+# =========================================================
+# "선택안함" 버튼 클릭 처리
+#
+# 사용자의 기존 선택을 전부 제거하고 미선택 상태로 되돌린다.
+# =========================================================
+def handle_clear_action(data: dict):
+    original = data.get("originalMessage") or {}
+    user = data.get("user") or {}
+    tenant = data.get("tenant") or {}
+
+    user_id = str(user.get("id") or "user")
+    tenant_id = str(tenant.get("id") or "tenant")
+
+    status = parse_status(original)
+
+    user_tag = mention_member(
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    status = remove_user_votes(status, user_tag)
 
     print(
-        "[COFFEE VOTE]",
+        "[COFFEE VOTE CLEARED]",
         {
-            "section": section,
-            "menu": menu,
-            "temperature": temperature,
             "user_id": user_id,
             "status": status,
         },
     )
 
-    updated_fields = status_fields(status)
-
-    # -----------------------------------------------------
-    # 기존 버튼은 유지하고 선택 현황만 교체
-    # -----------------------------------------------------
-    new_attachments = []
-    status_replaced = False
-
-    for attachment in original.get("attachments") or []:
-        if attachment.get("title") == "선택 현황":
-            new_attachments.append(
-                status_attachment(updated_fields)
-            )
-            status_replaced = True
-        else:
-            new_attachments.append(attachment)
-
-    if not status_replaced:
-        new_attachments.append(
-            status_attachment(updated_fields)
-        )
-
-    return pack(
-        {
-            "responseType": "inChannel",
-            "replaceOriginal": True,
-            "text": (
-                original.get("text")
-                or "☕ 커피 투표를 시작합니다!"
-            ),
-            "attachments": new_attachments,
-        }
-    )
+    return rebuild_poll_message(original, status)
 
 
 # =========================================================
@@ -419,7 +512,11 @@ async def coffee_endpoint(req: Request):
 
     action_value = get_action_value(data)
 
-    # 버튼을 클릭한 요청
+    # "선택안함" 버튼 클릭
+    if action_value == CLEAR_ACTION_VALUE:
+        return handle_clear_action(data=data)
+
+    # 메뉴 버튼 클릭 (같은 버튼 재클릭 시 내부적으로 토글 취소 처리)
     if action_value.startswith("vote|"):
         return handle_coffee_action(
             data=data,
