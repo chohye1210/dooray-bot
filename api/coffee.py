@@ -101,9 +101,10 @@ SECTION_STYLE = {
 
 
 # =========================================================
-# "선택안함" 버튼 액션 값
+# "선택안함" 버튼 액션 값 / 선택 현황에 표시될 키
 # =========================================================
 CLEAR_ACTION_VALUE = "clear"
+NO_SELECTION_KEY = "선택안함"
 
 
 # =========================================================
@@ -289,7 +290,7 @@ def clear_button_block() -> list[dict]:
                 {
                     "name": "clear",
                     "type": "button",
-                    "text": "❌ 선택안함",
+                    "text": f"❌ {NO_SELECTION_KEY}",
                     "value": CLEAR_ACTION_VALUE,
                 }
             ],
@@ -466,7 +467,11 @@ def handle_coffee_action(
 # =========================================================
 # "선택안함" 버튼 클릭 처리
 #
-# 사용자의 기존 선택을 전부 제거하고 미선택 상태로 되돌린다.
+# 다른 메뉴 버튼과 동일하게 취급한다.
+# - 처음 클릭: 기존 메뉴 선택을 해제하고 "선택안함"으로 등록
+#   (선택 현황에 "선택안함" 항목으로 노출됨)
+# - 이미 "선택안함"을 고른 상태에서 다시 클릭:
+#   토글 취소되어 완전히 미선택 상태(투표 없음)로 돌아감
 # =========================================================
 def handle_clear_action(data: dict):
     original = data.get("originalMessage") or {}
@@ -483,15 +488,34 @@ def handle_clear_action(data: dict):
         user_id=user_id,
     )
 
+    # 이미 "선택안함" 상태였는지 (토글 취소 판단)
+    already_no_selection = user_tag in (
+        status.get(NO_SELECTION_KEY) or []
+    )
+
+    # 사용자의 기존 선택(메뉴든 "선택안함"이든)을 전부 제거
     status = remove_user_votes(status, user_tag)
 
-    print(
-        "[COFFEE VOTE CLEARED]",
-        {
-            "user_id": user_id,
-            "status": status,
-        },
-    )
+    if already_no_selection:
+        # 같은 버튼 재클릭 → 완전한 미선택 상태로 되돌림
+        print(
+            "[COFFEE VOTE NO-SELECTION TOGGLE OFF]",
+            {"user_id": user_id},
+        )
+    else:
+        # "선택안함"을 새로 등록
+        status.setdefault(NO_SELECTION_KEY, [])
+
+        if user_tag not in status[NO_SELECTION_KEY]:
+            status[NO_SELECTION_KEY].append(user_tag)
+
+        print(
+            "[COFFEE VOTE NO-SELECTION]",
+            {
+                "user_id": user_id,
+                "status": status,
+            },
+        )
 
     return rebuild_poll_message(original, status)
 
